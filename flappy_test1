@@ -1,0 +1,83 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <time.h>
+#include "vga_ball.h"
+
+#define DEVICE "/dev/vga_ball"
+
+int kbhit() {
+    struct termios oldt, newt;
+    int ch;
+    int oldf;
+    
+    tcgetattr(STDIN_FILENO, &oldt);          // 保存旧设置
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);        // 禁用缓冲和回显
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt); // 应用新设置
+
+    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);  // 设置非阻塞
+    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+
+    ch = getchar();                          // 尝试读入字符
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // 恢复终端设置
+    fcntl(STDIN_FILENO, F_SETFL, oldf);
+
+    if (ch != EOF) {
+        ungetc(ch, stdin);
+        return 1;
+    }
+
+    return 0;
+}
+
+int main() {
+    int fd = open(DEVICE, O_RDWR);
+    if (fd < 0) {
+        perror("open");
+        return 1;
+    }
+
+    vga_ball_arg_t data;
+    data.background.red = 0x00;
+    data.background.green = 0x00;
+    data.background.blue = 0x00;
+
+    data.position.x = 100;     // 固定x
+    data.position.y = 240;     // 初始y
+
+    int velocity = 0;
+    const int gravity = 1;
+    const int jump_force = -8;
+
+    while (1) {
+        if (kbhit()) {
+            char c = getchar();
+            if (c == ' ') {
+                velocity = jump_force;
+            } else if (c == 'q') {
+                break;
+            }
+        }
+
+        velocity += gravity;
+        data.position.y += velocity;
+
+        if (data.position.y < 0) data.position.y = 0;
+        if (data.position.y > 480 - 24) data.position.y = 480 - 24;  // bird height = 24
+
+        if (ioctl(fd, VGA_BALL_WRITE_BACKGROUND, &data) < 0) {
+            perror("ioctl");
+            break;
+        }
+
+        usleep(30000); // roughly ~30 FPS
+    }
+
+    close(fd);
+    return 0;
+}
